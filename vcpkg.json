@@ -1,0 +1,11 @@
+{
+  "name": "libhttp3",
+  "version": "0.1.0",
+  "dependencies": [
+    {
+      "name": "msquic",
+      "version>=": "2.3.5"
+    }
+  ],
+  "builtin-baseline": "c3173be258001c60814b6adf161322b6eb3688ee"
+}

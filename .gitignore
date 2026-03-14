@@ -1,0 +1,8 @@
+
+*.a
+
+vcpkg/
+
+vcpkg_installed/
+
+build/
