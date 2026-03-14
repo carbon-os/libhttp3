@@ -3,10 +3,12 @@
 #include <http3/http3_defs.h>
 #include <http3/http3_frame.h>
 #include <http3/http3_qpack.h>
+#include <http3/http3_wt_impl.h>
 #include <msquic.h>
 #include <atomic>
 #include <condition_variable>
 #include <future>
+#include <map>
 #include <mutex>
 
 namespace http3 {
@@ -23,6 +25,23 @@ struct ReqState {
     Client::Impl*        client    = nullptr;
 
     void fulfill(Result r) {
+        if (!fulfilled) { fulfilled = true; promise.set_value(std::move(r)); }
+    }
+};
+
+// ── WT CONNECT in-flight state ────────────────────────────────────────────────
+struct WtConnectState {
+    struct SendBuf { std::vector<uint8_t> data; QUIC_BUFFER qb; };
+
+    HQUIC                          stream  = nullptr;
+    detail::StreamBuf              buf;
+    bool                           hdr_done  = false;
+    bool                           fulfilled = false;
+    std::promise<WtResult>         promise;
+    Client::Impl*                  client    = nullptr;
+    std::string                    path;
+
+    void fulfill(WtResult r) {
         if (!fulfilled) { fulfilled = true; promise.set_value(std::move(r)); }
     }
 };
@@ -47,8 +66,11 @@ struct Client::Impl {
     std::mutex              mu;
     std::condition_variable cv;
 
-    ~Impl();
+    // WT session registry
+    std::mutex                              wt_mu;
+    std::map<uint64_t, WtSession::Impl*>    wt_sessions;
 
+    ~Impl();
     bool   ensure_connected();
     void   disconnect();
     void   open_outbound_streams();
@@ -57,9 +79,17 @@ struct Client::Impl {
                       const std::string& body,
                       const std::string& content_type,
                       const Headers&     extra);
+    WtResult do_webtransport(const std::string& path,
+                              const std::string& origin,
+                              const Headers&     extra);
+
+    void register_wt_session(WtSession::Impl* s);
+    void unregister_wt_session(uint64_t sid);
+    WtSession::Impl* find_wt_session(uint64_t sid);
 
     static QUIC_STATUS QUIC_API cb_conn  (HQUIC, void*, QUIC_CONNECTION_EVENT*);
     static QUIC_STATUS QUIC_API cb_stream(HQUIC, void*, QUIC_STREAM_EVENT*);
+    static QUIC_STATUS QUIC_API cb_wt_connect(HQUIC, void*, QUIC_STREAM_EVENT*);
     static QUIC_STATUS QUIC_API cb_unidi (HQUIC, void*, QUIC_STREAM_EVENT*);
     static QUIC_STATUS QUIC_API cb_send  (HQUIC, void*, QUIC_STREAM_EVENT*);
 };

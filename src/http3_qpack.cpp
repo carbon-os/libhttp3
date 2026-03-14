@@ -1,12 +1,12 @@
 // QPACK codec (RFC 9204) — static table + Huffman (RFC 7541 Appendix B)
 #include <http3/http3_qpack.h>
+#include <http3/http3_log.h>
 #include <cstring>
 #include <memory>
 #include <mutex>
 
 namespace http3::detail {
 
-// ── RFC 7541 Huffman table ────────────────────────────────────────────────────
 static const uint32_t HC[256] = {
     0x1ff8,0x7fffd8,0xfffffe2,0xfffffe3,0xfffffe4,0xfffffe5,0xfffffe6,0xfffffe7,
     0xfffffe8,0xffffea,0x3ffffffc,0xfffffe9,0xfffffea,0x3ffffffd,0xfffffeb,0xfffffec,
@@ -47,7 +47,6 @@ static const uint8_t HL[256] = {
     23,26,27,26,26,27,27,27,27,27,28,27,27,27,27,27,26,
 };
 
-// ── Huffman trie ──────────────────────────────────────────────────────────────
 struct HNode {
     HNode* ch[256]; uint8_t sym, codeLen; bool leaf;
     HNode(): sym(0),codeLen(0),leaf(false){ memset(ch,0,sizeof(ch)); }
@@ -98,7 +97,6 @@ static bool huffDecode(const uint8_t* src, size_t srcLen, std::string& out) {
     return (cur&mask)==mask;
 }
 
-// ── Prefix-integer (RFC 7541 §5.1) ───────────────────────────────────────────
 static bool readPI(const uint8_t* b, size_t len, size_t& pos,
                     uint8_t nbits, uint64_t& out) {
     if(pos>=len) return false;
@@ -122,7 +120,6 @@ static bool readStr(const uint8_t* b, size_t len, size_t& pos,
     pos+=(size_t)slen; return true;
 }
 
-// ── QPACK static table (RFC 9204 Appendix A) ─────────────────────────────────
 static const struct { const char* n; const char* v; } ST[99] = {
     {":authority",""},{":path","/"}, {"age","0"},{"content-disposition",""},
     {"content-length","0"},{"cookie",""},{"date",""},{"etag",""},
@@ -174,29 +171,72 @@ static const struct { const char* n; const char* v; } ST[99] = {
     {"x-frame-options","deny"},{"x-frame-options","sameorigin"},
 };
 
-// ── Public API ────────────────────────────────────────────────────────────────
 bool qpack_decode(const uint8_t* data, size_t len, std::vector<QpackHeader>& out) {
+    H3LOG_VERBOSE("qpack_decode  len=%zu", len);
     size_t pos=0;
-    uint64_t ric=0; if(!readPI(data,len,pos,8,ric)||ric!=0) return false;
-    uint64_t base=0; if(!readPI(data,len,pos,7,base)||base!=0) return false;
+    uint64_t ric=0;
+    if(!readPI(data,len,pos,8,ric)||ric!=0) {
+        H3LOG_INFO("qpack_decode FAIL: bad required-insert-count %" PRIu64, ric);
+        return false;
+    }
+    uint64_t base=0;
+    if(!readPI(data,len,pos,7,base)||base!=0) {
+        H3LOG_INFO("qpack_decode FAIL: bad base %" PRIu64, base);
+        return false;
+    }
     while(pos<len){
         uint8_t b=data[pos];
         if(b&0x80){
-            if(!(b&0x40)) return false;
-            uint64_t idx=0; if(!readPI(data,len,pos,6,idx)||idx>=99) return false;
+            if(!(b&0x40)) {
+                H3LOG_INFO("qpack_decode FAIL: indexed field line, T=0 (dynamic) not supported");
+                return false;
+            }
+            uint64_t idx=0;
+            if(!readPI(data,len,pos,6,idx)||idx>=99) {
+                H3LOG_INFO("qpack_decode FAIL: static index %" PRIu64 " out of range", idx);
+                return false;
+            }
+            H3LOG_VERBOSE("  qpack indexed [%zu] %s: %s",
+                          (size_t)idx, ST[idx].n, ST[idx].v);
             out.push_back({ST[idx].n,ST[idx].v});
         } else if((b&0xc0)==0x40){
-            if(!(b&0x10)) return false;
-            uint64_t idx=0; if(!readPI(data,len,pos,4,idx)||idx>=99) return false;
-            std::string val; if(!readStr(data,len,pos,7,val)) return false;
+            if(!(b&0x10)) {
+                H3LOG_INFO("qpack_decode FAIL: literal with name ref, T=0 not supported");
+                return false;
+            }
+            uint64_t idx=0;
+            if(!readPI(data,len,pos,4,idx)||idx>=99) {
+                H3LOG_INFO("qpack_decode FAIL: literal name index %" PRIu64 " out of range", idx);
+                return false;
+            }
+            std::string val;
+            if(!readStr(data,len,pos,7,val)) {
+                H3LOG_INFO("qpack_decode FAIL: could not read literal value");
+                return false;
+            }
+            H3LOG_VERBOSE("  qpack literal-name [%zu] %s: %s",
+                          (size_t)idx, ST[idx].n, val.c_str());
             out.push_back({ST[idx].n,std::move(val)});
         } else if((b&0xe0)==0x20){
             std::string name,val;
-            if(!readStr(data,len,pos,3,name)) return false;
-            if(!readStr(data,len,pos,7,val))  return false;
+            if(!readStr(data,len,pos,3,name)) {
+                H3LOG_INFO("qpack_decode FAIL: could not read literal name");
+                return false;
+            }
+            if(!readStr(data,len,pos,7,val)) {
+                H3LOG_INFO("qpack_decode FAIL: could not read literal value for name=%s",
+                           name.c_str());
+                return false;
+            }
+            H3LOG_VERBOSE("  qpack literal %s: %s", name.c_str(), val.c_str());
             out.push_back({std::move(name),std::move(val)});
-        } else return false;
+        } else {
+            H3LOG_INFO("qpack_decode FAIL: unrecognised instruction byte 0x%02x at pos=%zu",
+                       b, pos);
+            return false;
+        }
     }
+    H3LOG_VERBOSE("qpack_decode OK  headers=%zu", out.size());
     return true;
 }
 
@@ -213,6 +253,10 @@ static void appSL(std::vector<uint8_t>& buf,uint8_t nb,const std::string& s){
 }
 
 std::vector<uint8_t> qpack_encode(const std::vector<QpackHeader>& headers) {
+    H3LOG_VERBOSE("qpack_encode  count=%zu", headers.size());
+    for (auto& h : headers)
+        H3LOG_VERBOSE("  > %s: %s", h.name.c_str(), h.value.c_str());
+
     std::vector<uint8_t> out;
     out.reserve(64);
     appPI(out,0x00u,8,0);
@@ -220,16 +264,20 @@ std::vector<uint8_t> qpack_encode(const std::vector<QpackHeader>& headers) {
     for(const auto& h:headers){
         for(int i=0;i<99;i++){
             if(h.name==ST[i].n&&h.value==ST[i].v){
+                H3LOG_VERBOSE("  encode indexed [%d]", i);
                 appPI(out,0xc0u,6,(uint64_t)i); goto next; }}
         for(int i=0;i<99;i++){
             if(h.name==ST[i].n){
+                H3LOG_VERBOSE("  encode literal-name [%d] val=%s", i, h.value.c_str());
                 appPI(out,0x50u,4,(uint64_t)i);
                 appSL(out,7,h.value); goto next; }}
+        H3LOG_VERBOSE("  encode literal %s: %s", h.name.c_str(), h.value.c_str());
         { appPI(out,0x20u,3,h.name.size());
           out.insert(out.end(),h.name.begin(),h.name.end());
           appSL(out,7,h.value); }
         next:;
     }
+    H3LOG_VERBOSE("qpack_encode  out=%zu bytes", out.size());
     return out;
 }
 

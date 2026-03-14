@@ -15,8 +15,41 @@ cmake -B build \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 
-# Run server
+# ── HTTP/3 examples ───────────────────────────────────────────────────────────
+
+# Terminal 1 — HTTP/3 server
 ./build/h3_server server.crt server.key 4005
 
-# Run client (separate terminal)
+# Terminal 2 — HTTP/3 client
 ./build/h3_client localhost 4005
+
+# ── WebTransport examples ─────────────────────────────────────────────────────
+
+# Terminal 1 — WebTransport server (can share port with h3_server or use its own)
+./build/h3_webtransport_server server.crt server.key 4006
+
+# Terminal 2 — WebTransport client
+./build/h3_webtransport_client localhost 4006
+
+
+
+# tests
+
+# start the server first
+./build/h3_webtransport_server server.crt server.key 4006
+
+# run the Go client
+go run tests/webtransport_client.go -addr localhost:4006 -insecure
+
+# extra verbosity
+go run webtransport_client.go -addr localhost:4007 -insecure -v
+
+
+
+# The WebTransport client runs four tests in sequence:
+#   1. plain HTTP sanity check  — GET /healthz on the same QUIC connection
+#   2. test_echo                — bidi stream round-trip + datagram echo on /echo
+#   3. test_chat                — server-push unidi stream + bidi reply on /chat
+#   4. test_stream_test         — server opens 3 unidi + 2 bidi streams,
+#                                 sends 5 datagrams on /stream_test
+#   5. test_rejected            — verifies /does-not-exist returns a 404

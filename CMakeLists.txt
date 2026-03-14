@@ -12,6 +12,7 @@ add_library(http3 STATIC
     src/http3_qpack.cpp
     src/http3_server.cpp
     src/http3_client.cpp
+    src/http3_webtransport.cpp      # ← NEW
 )
 
 target_include_directories(http3
@@ -24,7 +25,7 @@ if(WIN32)
     target_link_libraries(http3 PUBLIC ws2_32)
 endif()
 
-foreach(ex server client)
+foreach(ex server client webtransport_server webtransport_client)
     add_executable(h3_${ex} examples/${ex}.cpp)
     target_link_libraries(h3_${ex} PRIVATE http3)
     if(WIN32)

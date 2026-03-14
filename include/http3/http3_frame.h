@@ -10,6 +10,7 @@ struct StreamBuf {
     std::vector<uint8_t> data;
     void   append(const uint8_t* p, size_t n) { data.insert(data.end(), p, p+n); }
     size_t size()  const { return data.size(); }
+    bool   empty() const { return data.empty(); }
     void   consume(size_t n) { data.erase(data.begin(), data.begin()+(ptrdiff_t)n); }
     const uint8_t* ptr() const { return data.data(); }
 };

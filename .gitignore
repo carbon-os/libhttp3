@@ -6,3 +6,6 @@ vcpkg/
 vcpkg_installed/
 
 build/
+*.crt
+.gitignore
+*.key
