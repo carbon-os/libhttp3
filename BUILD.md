@@ -29,7 +29,7 @@ cmake --build build --config Release
 ./build/h3_webtransport_server server.crt server.key 4006
 
 # Terminal 2 — WebTransport client
-./build/h3_webtransport_client localhost 4006
+./build/h3_webtransport_client localhost 5010
 
 
 

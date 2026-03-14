@@ -1,5 +1,6 @@
 #include <http3.h>
-#include <cinttypes>   // ← add this
+#include <http3/webtransport.h>
+#include <cinttypes>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -10,45 +11,51 @@ static http3::Server* g_svr = nullptr;
 static void on_signal(int) { if (g_svr) g_svr->stop(); }
 
 // ── /echo ─────────────────────────────────────────────────────────────────────
-static void wt_echo(http3::WtSession& sess) {
+static void wt_echo(webtransport::Session& sess) {
     printf("[echo] session %" PRIu64 " opened\n", sess.session_id());
 
-    sess.on_stream([](http3::WtStream& s) {
-        // Capture id/bidi by VALUE — s is a lambda parameter and must not
-        // be captured by reference because it ceases to exist after this
-        // outer lambda returns.
-        uint64_t sid   = s.id();
-        bool     bidi  = s.is_bidi();
-        printf("[echo] new %s stream %" PRIu64 "\n",
-               bidi ? "bidi" : "unidi", sid);
+    // Handle client-initiated bidirectional streams
+    sess.on_bidi_stream([](webtransport::BidirectionalStream& s) {
+        uint64_t sid = s.id();
+        printf("[echo] new bidi stream %" PRIu64 "\n", sid);
 
-        s.on_data([&s, sid, bidi](const uint8_t* data, size_t len) {
+        s.on_data([&s, sid](const uint8_t* data, size_t len) {
             printf("[echo] stream %" PRIu64 " rx %zu bytes\n", sid, len);
-            if (bidi) {
-                bool ok = s.write(data, len);
-                printf("[echo] stream %" PRIu64 " echo write=%s\n",
-                       sid, ok ? "OK" : "FAILED");
-                // FIN our write side now — we have echoed everything we
-                // will ever echo.  Must be called here (inside data_cb)
-                // and not deferred to the RECEIVE callback level, otherwise
-                // MsQuic discards the pending echo before sending it.
-                s.close_write();
-            }
+            bool ok = s.write(data, len);
+            printf("[echo] stream %" PRIu64 " echo write=%s\n",
+                   sid, ok ? "OK" : "FAILED");
+            // FIN our write side now — we have echoed everything
+            s.close_write();
         });
+        
         s.on_close([sid]() {
-            // Capture sid by VALUE — s is invalid by the time on_close fires.
             printf("[echo] stream %" PRIu64 " closed\n", sid);
         });
     });
 
+    // Handle client-initiated unidirectional (receive-only) streams
+    sess.on_receive_stream([](webtransport::ReceiveStream& s) {
+        uint64_t sid = s.id();
+        printf("[echo] new receive stream %" PRIu64 "\n", sid);
+
+        s.on_data([sid](const uint8_t* data, size_t len) {
+            printf("[echo] stream %" PRIu64 " rx %zu bytes (unidi, cannot echo)\n", sid, len);
+        });
+        
+        s.on_close([sid]() {
+            printf("[echo] receive stream %" PRIu64 " closed\n", sid);
+        });
+    });
+
+    // Handle datagrams
     sess.on_datagram([&sess](const uint8_t* data, size_t len) {
         printf("[echo] datagram rx %zu bytes\n", len);
         sess.send_datagram(data, len);
     });
 
-    sess.on_close([](uint32_t ec, std::string reason) {
-        printf("[echo] session closed  ec=%u  reason=%s\n",
-               ec, reason.c_str());
+    sess.on_close([](uint32_t ec, std::string_view reason) {
+        printf("[echo] session closed  ec=%u  reason=%.*s\n",
+               ec, (int)reason.size(), reason.data());
     });
 
     sess.wait();
@@ -56,38 +63,52 @@ static void wt_echo(http3::WtSession& sess) {
 }
 
 // ── /chat ─────────────────────────────────────────────────────────────────────
-static void wt_chat(http3::WtSession& sess) {
+static void wt_chat(webtransport::Session& sess) {
     printf("[chat] session %" PRIu64 " opened\n", sess.session_id());
 
-    http3::WtStream* announce = sess.open_unidi_stream();
+    // Send a welcome message via a server-initiated unidi stream
+    webtransport::SendStream* announce = sess.open_send_stream();
     if (announce) {
         std::string hello = "welcome to /chat";
         announce->write(hello);
         announce->close_write();
     }
 
-    sess.on_stream([&sess](http3::WtStream& s) {
-        uint64_t sid  = s.id();
-        bool     bidi = s.is_bidi();
-        printf("[chat] peer opened %s stream %" PRIu64 "\n",
-               bidi ? "bidi" : "unidi", sid);
+    sess.on_bidi_stream([&sess](webtransport::BidirectionalStream& s) {
+        uint64_t sid = s.id();
+        printf("[chat] peer opened bidi stream %" PRIu64 "\n", sid);
 
-        s.on_data([&sess, &s, sid, bidi](const uint8_t* data, size_t len) {
+        s.on_data([&sess, &s, sid](const uint8_t* data, size_t len) {
             std::string msg(reinterpret_cast<const char*>(data), len);
             printf("[chat] stream %" PRIu64 " says: %s\n", sid, msg.c_str());
-            if (bidi) {
-                std::string reply = "server heard: " + msg;
-                bool ok = s.write(reply);
-                printf("[chat] stream %" PRIu64 " reply write=%s\n",
-                       sid, ok ? "OK" : "FAILED");
-                // FIN our write side after the reply — same reasoning as echo.
-                s.close_write();
-            }
+            
+            std::string reply = "server heard: " + msg;
+            bool ok = s.write(reply);
+            printf("[chat] stream %" PRIu64 " reply write=%s\n",
+                   sid, ok ? "OK" : "FAILED");
+            s.close_write();
+            
+            // Broadcast via datagram as well
             sess.send_datagram(data, len);
         });
+        
         s.on_close([sid]() {
-            // Capture sid by VALUE.
-            printf("[chat] stream %" PRIu64 " closed\n", sid);
+            printf("[chat] bidi stream %" PRIu64 " closed\n", sid);
+        });
+    });
+
+    sess.on_receive_stream([&sess](webtransport::ReceiveStream& s) {
+        uint64_t sid = s.id();
+        printf("[chat] peer opened receive stream %" PRIu64 "\n", sid);
+
+        s.on_data([&sess, sid](const uint8_t* data, size_t len) {
+            std::string msg(reinterpret_cast<const char*>(data), len);
+            printf("[chat] stream %" PRIu64 " says (unidi): %s\n", sid, msg.c_str());
+            sess.send_datagram(data, len); // Bounce via datagram
+        });
+
+        s.on_close([sid]() {
+            printf("[chat] receive stream %" PRIu64 " closed\n", sid);
         });
     });
 
@@ -96,27 +117,27 @@ static void wt_chat(http3::WtSession& sess) {
         sess.send_datagram(data, len);
     });
 
-    sess.on_close([](uint32_t ec, std::string reason) {
-        printf("[chat] session closed  ec=%u  reason=%s\n",
-               ec, reason.c_str());
+    sess.on_close([](uint32_t ec, std::string_view reason) {
+        printf("[chat] session closed  ec=%u  reason=%.*s\n",
+               ec, (int)reason.size(), reason.data());
     });
 
     sess.wait();
     printf("[chat] session handler returning\n");
 }
 
-// ── /stream_test — no changes needed, bidi already calls close_write() ────────
-static void wt_stream_test(http3::WtSession& sess) {
+// ── /stream_test ──────────────────────────────────────────────────────────────
+static void wt_stream_test(webtransport::Session& sess) {
     printf("[stream_test] session %" PRIu64 " opened\n", sess.session_id());
 
-    sess.on_close([](uint32_t ec, std::string reason) {
-        printf("[stream_test] session closed  ec=%u  reason=%s\n",
-               ec, reason.c_str());
+    sess.on_close([](uint32_t ec, std::string_view reason) {
+        printf("[stream_test] session closed  ec=%u  reason=%.*s\n",
+               ec, (int)reason.size(), reason.data());
     });
 
     for (int i = 0; i < 3; ++i) {
-        http3::WtStream* s = sess.open_unidi_stream();
-        if (!s) { printf("[stream_test] open_unidi_stream failed\n"); continue; }
+        webtransport::SendStream* s = sess.open_send_stream();
+        if (!s) { printf("[stream_test] open_send_stream failed\n"); continue; }
         std::string msg = "unidi stream #" + std::to_string(i);
         s->write(msg);
         s->close_write();
@@ -125,7 +146,7 @@ static void wt_stream_test(http3::WtSession& sess) {
     }
 
     for (int i = 0; i < 2; ++i) {
-        http3::WtStream* s = sess.open_bidi_stream();
+        webtransport::BidirectionalStream* s = sess.open_bidi_stream();
         if (!s) { printf("[stream_test] open_bidi_stream failed\n"); continue; }
         uint64_t sid = s->id();
         s->on_data([sid](const uint8_t* data, size_t len) {

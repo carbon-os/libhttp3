@@ -12,13 +12,10 @@ add_library(http3 STATIC
     src/http3_qpack.cpp
     src/http3_server.cpp
     src/http3_client.cpp
-    src/http3_webtransport.cpp      # ← NEW
+    src/http3_webtransport.cpp
 )
 
-target_include_directories(http3
-    PUBLIC include
-)
-
+target_include_directories(http3 PUBLIC include)
 target_link_libraries(http3 PUBLIC msquic)
 
 if(WIN32)

@@ -14,14 +14,15 @@
 namespace http3 {
 
 struct Route {
-    std::string method;
-    std::regex  pattern;
-    Handler     handler;
+    std::string              method;
+    std::regex               pattern;
+    std::vector<std::string> param_names;  // names for :param captures, in order
+    Handler                  handler;
 };
 
 struct WtRoute {
-    std::regex  pattern;
-    WtHandler   handler;
+    std::regex pattern;
+    WtHandler  handler;
 };
 
 // ── Per-stream context ────────────────────────────────────────────────────────
@@ -30,7 +31,7 @@ struct SrvConnCtx;
 struct SrvStreamCtx {
     const QUIC_API_TABLE* msquic;
     HQUIC                 stream;
-    bool                  is_request;   // bidi = potential H3 request or WT bidi
+    bool                  is_request;
 
     detail::StreamBuf buf;
     Request           req;
@@ -38,18 +39,12 @@ struct SrvStreamCtx {
     bool              body_done{false};
     SrvConnCtx*       conn;
 
-    // ── stream type detection ─────────────────────────────────────────────────
     enum class Kind : uint8_t {
-        Pending,     // not yet determined
-        H3,          // regular HTTP/3 request (bidi)
-        H3Control,   // H3 unidi control / QPACK stream
-        WtBidi,      // WebTransport bidi data stream
-        WtUnidi,     // WebTransport unidi data stream
-        WtConnect,   // the CONNECT stream that established a WT session
+        Pending, H3, H3Control, WtBidi, WtUnidi, WtConnect,
     };
     Kind     kind{Kind::Pending};
-    uint64_t wt_session_id{0};    // valid for WtBidi/WtUnidi
-    uint64_t quic_stream_id{UINT64_MAX};  // cached QUIC stream id
+    uint64_t wt_session_id{0};
+    uint64_t quic_stream_id{UINT64_MAX};
 };
 
 // ── Per-connection context ────────────────────────────────────────────────────
@@ -59,13 +54,12 @@ struct SrvConnCtx {
     Server::Impl*         srv;
     HQUIC ctrl_out{}, qenc_out{}, qdec_out{};
 
-    // WT session registry (session_id → WtSession::Impl*)
-    std::mutex                              wt_mu;
-    std::map<uint64_t, WtSession::Impl*>    wt_sessions;
+    std::mutex                                          wt_mu;
+    std::map<uint64_t, webtransport::Session::Impl*>    wt_sessions;
 
-    void register_wt_session(WtSession::Impl* s);
+    void register_wt_session  (webtransport::Session::Impl* s);
     void unregister_wt_session(uint64_t sid);
-    WtSession::Impl* find_wt_session(uint64_t sid);
+    webtransport::Session::Impl* find_wt_session(uint64_t sid);
 };
 
 // ── Server::Impl ──────────────────────────────────────────────────────────────
@@ -81,11 +75,11 @@ struct Server::Impl {
     HQUIC                 listener = nullptr;
     std::atomic<bool>     running{false};
 
-    void add_route(const std::string& method,
-                   const std::string& pattern, Handler h);
+    void add_route   (const std::string& method,
+                      const std::string& pattern, Handler h);
     void add_wt_route(const std::string& pattern, WtHandler h);
-    bool match(const std::string& method, const std::string& path,
-               Route& out, std::smatch& caps);
+    bool match   (const std::string& method, const std::string& path,
+                  Route& out, std::smatch& caps);
     bool match_wt(const std::string& path, WtRoute& out);
 
     bool start(const std::string& host, uint16_t port,
@@ -95,11 +89,11 @@ struct Server::Impl {
 
     void open_server_streams(SrvConnCtx* cc);
     void send_unidi(SrvConnCtx* cc, HQUIC s, std::vector<uint8_t> data);
-    void dispatch(SrvStreamCtx* sc);
-    void dispatch_wt(SrvStreamCtx* sc);   // handle WT CONNECT
+    void dispatch   (SrvStreamCtx* sc);
+    void dispatch_wt(SrvStreamCtx* sc);
     void send_response(SrvConnCtx* cc, HQUIC stream,
                        const Request& req, Response& resp);
-    void send_wt_accept(HQUIC stream);    // send :status 200 without FIN
+    void send_wt_accept(HQUIC stream);
 
     static QUIC_STATUS QUIC_API cb_listener(HQUIC, void*, QUIC_LISTENER_EVENT*);
     static QUIC_STATUS QUIC_API cb_conn    (HQUIC, void*, QUIC_CONNECTION_EVENT*);

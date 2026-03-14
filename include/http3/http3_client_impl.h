@@ -21,7 +21,7 @@ struct ReqState {
     Response             resp;
     bool                 hdr_done  = false;
     bool                 fulfilled = false;
-    std::promise<Result> promise;
+    std::promise<http3::Result> promise;
     Client::Impl*        client    = nullptr;
 
     void fulfill(Result r) {
@@ -29,20 +29,25 @@ struct ReqState {
     }
 };
 
-// ── WT CONNECT in-flight state ────────────────────────────────────────────────
+// ── WebTransport CONNECT in-flight state ─────────────────────────────────────
 struct WtConnectState {
     struct SendBuf { std::vector<uint8_t> data; QUIC_BUFFER qb; };
 
-    HQUIC                          stream  = nullptr;
+    using SessionPtr = std::unique_ptr<webtransport::Session>;
+
+    HQUIC                          stream    = nullptr;
     detail::StreamBuf              buf;
     bool                           hdr_done  = false;
     bool                           fulfilled = false;
-    std::promise<WtResult>         promise;
+    std::promise<SessionPtr>       promise;
     Client::Impl*                  client    = nullptr;
     std::string                    path;
 
-    void fulfill(WtResult r) {
-        if (!fulfilled) { fulfilled = true; promise.set_value(std::move(r)); }
+    void fulfill(SessionPtr s) {
+        if (!fulfilled) { fulfilled = true; promise.set_value(std::move(s)); }
+    }
+    void fail() {
+        if (!fulfilled) { fulfilled = true; promise.set_value(nullptr); }
     }
 };
 
@@ -66,9 +71,8 @@ struct Client::Impl {
     std::mutex              mu;
     std::condition_variable cv;
 
-    // WT session registry
-    std::mutex                              wt_mu;
-    std::map<uint64_t, WtSession::Impl*>    wt_sessions;
+    std::mutex                                          wt_mu;
+    std::map<uint64_t, webtransport::Session::Impl*>    wt_sessions;
 
     ~Impl();
     bool   ensure_connected();
@@ -79,19 +83,20 @@ struct Client::Impl {
                       const std::string& body,
                       const std::string& content_type,
                       const Headers&     extra);
-    WtResult do_webtransport(const std::string& path,
-                              const std::string& origin,
-                              const Headers&     extra);
+    std::unique_ptr<webtransport::Session>
+           do_webtransport(const std::string& path,
+                           const std::string& origin,
+                           const Headers&     extra);
 
-    void register_wt_session(WtSession::Impl* s);
+    void register_wt_session  (webtransport::Session::Impl* s);
     void unregister_wt_session(uint64_t sid);
-    WtSession::Impl* find_wt_session(uint64_t sid);
+    webtransport::Session::Impl* find_wt_session(uint64_t sid);
 
-    static QUIC_STATUS QUIC_API cb_conn  (HQUIC, void*, QUIC_CONNECTION_EVENT*);
-    static QUIC_STATUS QUIC_API cb_stream(HQUIC, void*, QUIC_STREAM_EVENT*);
+    static QUIC_STATUS QUIC_API cb_conn      (HQUIC, void*, QUIC_CONNECTION_EVENT*);
+    static QUIC_STATUS QUIC_API cb_stream    (HQUIC, void*, QUIC_STREAM_EVENT*);
     static QUIC_STATUS QUIC_API cb_wt_connect(HQUIC, void*, QUIC_STREAM_EVENT*);
-    static QUIC_STATUS QUIC_API cb_unidi (HQUIC, void*, QUIC_STREAM_EVENT*);
-    static QUIC_STATUS QUIC_API cb_send  (HQUIC, void*, QUIC_STREAM_EVENT*);
+    static QUIC_STATUS QUIC_API cb_unidi     (HQUIC, void*, QUIC_STREAM_EVENT*);
+    static QUIC_STATUS QUIC_API cb_send      (HQUIC, void*, QUIC_STREAM_EVENT*);
 };
 
 } // namespace http3
