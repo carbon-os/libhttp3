@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>libhttp3 WebTransport Test</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; background: #0f0f0f; color: #e0e0e0; padding: 20px; }
+  h1 { color: #7ec8e3; margin-bottom: 6px; font-size: 1.2rem; }
+  p.sub { color: #666; font-size: 0.8rem; margin-bottom: 20px; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+
+  .card {
+    background: #1a1a1a;
+    border: 1px solid #2e2e2e;
+    border-radius: 8px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .card h2 { font-size: 0.95rem; color: #7ec8e3; }
+  .card p.desc { font-size: 0.75rem; color: #888; line-height: 1.4; min-height: 40px; }
+
+  .controls { display: flex; gap: 6px; flex-wrap: wrap; }
+  button {
+    background: #2a2a2a;
+    color: #ccc;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    font-family: monospace;
+  }
+  button:hover { background: #333; color: #fff; border-color: #7ec8e3; }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  button.primary { background: #194d5e; border-color: #7ec8e3; color: #7ec8e3; }
+  button.danger  { background: #3a1a1a; border-color: #e37e7e; color: #e37e7e; }
+
+  input[type=text] {
+    flex: 1;
+    background: #111;
+    border: 1px solid #333;
+    color: #ccc;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 0.78rem;
+    font-family: monospace;
+    min-width: 0;
+  }
+
+  .status {
+    font-size: 0.75rem;
+    padding: 3px 8px;
+    border-radius: 4px;
+    display: inline-block;
+    align-self: flex-start;
+  }
+  .status.disconnected { background: #2a1a1a; color: #888; }
+  .status.connecting   { background: #2a2a10; color: #ccaa44; }
+  .status.connected    { background: #0e2a1a; color: #4ec97e; }
+  .status.error        { background: #2a1010; color: #e37e7e; }
+
+  .log {
+    background: #0a0a0a;
+    border: 1px solid #222;
+    border-radius: 4px;
+    padding: 8px;
+    height: 180px;
+    overflow-y: auto;
+    font-size: 0.72rem;
+    line-height: 1.6;
+    flex: 1;
+  }
+  .log .ts   { color: #555; }
+  .log .tx   { color: #7ec8e3; }
+  .log .rx   { color: #4ec97e; }
+  .log .info { color: #aaa; }
+  .log .err  { color: #e37e7e; }
+  .log .dg   { color: #c97ee3; }
+
+  .global-log {
+    margin-top: 20px;
+    background: #0a0a0a;
+    border: 1px solid #2e2e2e;
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .global-log h2 { font-size: 0.85rem; color: #555; margin-bottom: 8px; }
+  .global-log .log { height: 120px; }
+
+  footer { margin-top: 14px; font-size: 0.7rem; color: #444; }
+</style>
+</head>
+<body>
+
+<h1>libhttp3 — WebTransport Test Console</h1>
+<p class="sub" id="serverAddr">server: wss://localhost:5010</p>
+
+<div class="grid">
+
+  <!-- ── /echo ── -->
+  <div class="card" id="card-echo">
+    <h2>/echo</h2>
+    <p class="desc">Opens a bidi stream, sends a message, expects the server to echo it back. Also sends a datagram.</p>
+    <span class="status disconnected" id="status-echo">disconnected</span>
+    <div class="controls">
+      <button class="primary" onclick="echoConnect()">Connect</button>
+      <button onclick="echoDisconnect()" id="btn-echo-disc" disabled>Disconnect</button>
+    </div>
+    <div class="controls">
+      <input type="text" id="echo-msg" value="Hello /echo!" placeholder="message">
+      <button onclick="echoSendBidi()" id="btn-echo-bidi" disabled>Send Bidi</button>
+      <button onclick="echoSendDatagram()" id="btn-echo-dg" disabled>Send DG</button>
+    </div>
+    <div class="log" id="log-echo"></div>
+  </div>
+
+  <!-- ── /chat ── -->
+  <div class="card" id="card-chat">
+    <h2>/chat</h2>
+    <p class="desc">On connect the server pushes a welcome unidi stream. Send messages via bidi stream — server replies and also broadcasts as a datagram.</p>
+    <span class="status disconnected" id="status-chat">disconnected</span>
+    <div class="controls">
+      <button class="primary" onclick="chatConnect()">Connect</button>
+      <button onclick="chatDisconnect()" id="btn-chat-disc" disabled>Disconnect</button>
+    </div>
+    <div class="controls">
+      <input type="text" id="chat-msg" value="Hello /chat!" placeholder="message">
+      <button onclick="chatSend()" id="btn-chat-send" disabled>Send</button>
+      <button onclick="chatSendDatagram()" id="btn-chat-dg" disabled>Send DG</button>
+    </div>
+    <div class="log" id="log-chat"></div>
+  </div>
+
+  <!-- ── /stream_test ── -->
+  <div class="card" id="card-st">
+    <h2>/stream_test</h2>
+    <p class="desc">Server immediately pushes 3 unidi streams + opens 2 bidi streams + fires 5 datagrams. Just connect and watch.</p>
+    <span class="status disconnected" id="status-st">disconnected</span>
+    <div class="controls">
+      <button class="primary" onclick="stConnect()">Connect</button>
+      <button onclick="stDisconnect()" id="btn-st-disc" disabled>Disconnect</button>
+    </div>
+    <div class="log" id="log-st"></div>
+  </div>
+
+</div>
+
+<!-- global log -->
+<div class="global-log">
+  <h2>▸ global event log &nbsp;<button style="float:right" onclick="clearGlobal()">clear</button></h2>
+  <div class="log" id="log-global"></div>
+</div>
+
+<footer>
+  Connects to <span id="footer-host">localhost:5010</span> via WebTransport (QUIC + TLS 1.3)
+</footer>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const HOST = 'localhost';
+const PORT = 5017;
+const BASE = `https://${HOST}:${PORT}`;
+
+// ── Logging ───────────────────────────────────────────────────────────────────
+function ts() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+}
+
+function log(panelId, cls, msg) {
+  const el = document.getElementById('log-' + panelId);
+  const line = document.createElement('div');
+  line.innerHTML = `<span class="ts">[${ts()}]</span> <span class="${cls}">${msg}</span>`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+  glog(panelId, cls, msg);
+}
+
+function glog(src, cls, msg) {
+  const el = document.getElementById('log-global');
+  const line = document.createElement('div');
+  line.innerHTML = `<span class="ts">[${ts()}]</span> <span style="color:#555">[${src}]</span> <span class="${cls}">${msg}</span>`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function clearGlobal() { document.getElementById('log-global').innerHTML = ''; }
+
+function setStatus(id, cls, text) {
+  const el = document.getElementById('status-' + id);
+  el.className = 'status ' + cls;
+  el.textContent = text;
+}
+
+function enc(s) { return new TextEncoder().encode(s); }
+function dec(b) { return new TextDecoder().decode(b); }
+
+async function readAll(readable, onChunk) {
+  const reader = readable.getReader();
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      onChunk(value);
+    }
+  } catch(e) { /* stream closed */ }
+}
+
+// ── /echo ─────────────────────────────────────────────────────────────────────
+let echoWT = null;
+
+async function echoConnect() {
+  setStatus('echo', 'connecting', 'connecting…');
+  log('echo', 'info', `connecting to ${BASE}/echo`);
+  try {
+    echoWT = new WebTransport(`${BASE}/echo`);
+    await echoWT.ready;
+    setStatus('echo', 'connected', 'connected ✓');
+    log('echo', 'info', 'session open');
+    document.getElementById('btn-echo-disc').disabled  = false;
+    document.getElementById('btn-echo-bidi').disabled  = false;
+    document.getElementById('btn-echo-dg').disabled    = false;
+
+    // Listen for incoming datagrams (echoed back)
+    readAll(echoWT.datagrams.readable, v => {
+      log('echo', 'dg', `◀ datagram: "${dec(v)}"`);
+    });
+
+    echoWT.closed.then(() => {
+      setStatus('echo', 'disconnected', 'disconnected');
+      log('echo', 'info', 'session closed');
+      echoDisableButtons();
+    }).catch(() => {});
+  } catch(e) {
+    setStatus('echo', 'error', 'error');
+    log('echo', 'err', `connect failed: ${e.message}`);
+  }
+}
+
+async function echoSendBidi() {
+  if (!echoWT) return;
+  const msg = document.getElementById('echo-msg').value || 'ping';
+  try {
+    const stream = await echoWT.createBidirectionalStream();
+    const writer = stream.writable.getWriter();
+    await writer.write(enc(msg));
+    await writer.close();
+    log('echo', 'tx', `▶ bidi: "${msg}"`);
+
+    readAll(stream.readable, v => {
+      log('echo', 'rx', `◀ bidi echo: "${dec(v)}"`);
+    });
+  } catch(e) { log('echo', 'err', e.message); }
+}
+
+async function echoSendDatagram() {
+  if (!echoWT) return;
+  const msg = document.getElementById('echo-msg').value || 'ping';
+  try {
+    const w = echoWT.datagrams.writable.getWriter();
+    await w.write(enc(msg));
+    w.releaseLock();
+    log('echo', 'dg', `▶ datagram: "${msg}"`);
+  } catch(e) { log('echo', 'err', e.message); }
+}
+
+async function echoDisconnect() {
+  if (!echoWT) return;
+  try { echoWT.close({ closeCode: 0, reason: 'user closed' }); } catch(e) {}
+  echoWT = null;
+  echoDisableButtons();
+  setStatus('echo', 'disconnected', 'disconnected');
+}
+
+function echoDisableButtons() {
+  document.getElementById('btn-echo-disc').disabled = true;
+  document.getElementById('btn-echo-bidi').disabled = true;
+  document.getElementById('btn-echo-dg').disabled   = true;
+}
+
+// ── /chat ─────────────────────────────────────────────────────────────────────
+let chatWT = null;
+
+async function chatConnect() {
+  setStatus('chat', 'connecting', 'connecting…');
+  log('chat', 'info', `connecting to ${BASE}/chat`);
+  try {
+    chatWT = new WebTransport(`${BASE}/chat`);
+    await chatWT.ready;
+    setStatus('chat', 'connected', 'connected ✓');
+    log('chat', 'info', 'session open');
+    document.getElementById('btn-chat-disc').disabled = false;
+    document.getElementById('btn-chat-send').disabled = false;
+    document.getElementById('btn-chat-dg').disabled   = false;
+
+    // Server pushes a welcome unidi stream on connect
+    (async () => {
+      const reader = chatWT.incomingUnidirectionalStreams.getReader();
+      try {
+        while (true) {
+          const { value: stream, done } = await reader.read();
+          if (done) break;
+          readAll(stream.readable, v => {
+            log('chat', 'rx', `◀ server unidi: "${dec(v)}"`);
+          });
+        }
+      } catch(e) {}
+    })();
+
+    // Incoming datagrams
+    readAll(chatWT.datagrams.readable, v => {
+      log('chat', 'dg', `◀ datagram broadcast: "${dec(v)}"`);
+    });
+
+    chatWT.closed.then(() => {
+      setStatus('chat', 'disconnected', 'disconnected');
+      log('chat', 'info', 'session closed');
+      chatDisableButtons();
+    }).catch(() => {});
+  } catch(e) {
+    setStatus('chat', 'error', 'error');
+    log('chat', 'err', `connect failed: ${e.message}`);
+  }
+}
+
+async function chatSend() {
+  if (!chatWT) return;
+  const msg = document.getElementById('chat-msg').value || 'hello';
+  try {
+    const stream = await chatWT.createBidirectionalStream();
+    const writer = stream.writable.getWriter();
+    await writer.write(enc(msg));
+    await writer.close();
+    log('chat', 'tx', `▶ bidi: "${msg}"`);
+
+    readAll(stream.readable, v => {
+      log('chat', 'rx', `◀ server reply: "${dec(v)}"`);
+    });
+  } catch(e) { log('chat', 'err', e.message); }
+}
+
+async function chatSendDatagram() {
+  if (!chatWT) return;
+  const msg = document.getElementById('chat-msg').value || 'hello';
+  try {
+    const w = chatWT.datagrams.writable.getWriter();
+    await w.write(enc(msg));
+    w.releaseLock();
+    log('chat', 'dg', `▶ datagram: "${msg}"`);
+  } catch(e) { log('chat', 'err', e.message); }
+}
+
+async function chatDisconnect() {
+  if (!chatWT) return;
+  try { chatWT.close({ closeCode: 0, reason: 'user closed' }); } catch(e) {}
+  chatWT = null;
+  chatDisableButtons();
+  setStatus('chat', 'disconnected', 'disconnected');
+}
+
+function chatDisableButtons() {
+  document.getElementById('btn-chat-disc').disabled = true;
+  document.getElementById('btn-chat-send').disabled = true;
+  document.getElementById('btn-chat-dg').disabled   = true;
+}
+
+// ── /stream_test ──────────────────────────────────────────────────────────────
+let stWT = null;
+
+async function stConnect() {
+  setStatus('st', 'connecting', 'connecting…');
+  log('st', 'info', `connecting to ${BASE}/stream_test`);
+  try {
+    stWT = new WebTransport(`${BASE}/stream_test`);
+    await stWT.ready;
+    setStatus('st', 'connected', 'connected ✓');
+    log('st', 'info', 'session open — server will push streams + datagrams');
+    document.getElementById('btn-st-disc').disabled = false;
+
+    // Receive server-initiated unidi streams (3 expected)
+    (async () => {
+      const reader = stWT.incomingUnidirectionalStreams.getReader();
+      try {
+        while (true) {
+          const { value: stream, done } = await reader.read();
+          if (done) break;
+          log('st', 'info', '◀ incoming unidi stream');
+          readAll(stream.readable, v => {
+            log('st', 'rx', `  unidi data: "${dec(v)}"`);
+          });
+        }
+      } catch(e) {}
+    })();
+
+    // Receive server-initiated bidi streams (2 expected) — echo them back
+    (async () => {
+      const reader = stWT.incomingBidirectionalStreams.getReader();
+      try {
+        while (true) {
+          const { value: stream, done } = await reader.read();
+          if (done) break;
+          log('st', 'info', '◀ incoming bidi stream — echoing');
+          const writer = stream.writable.getWriter();
+          readAll(stream.readable, async v => {
+            log('st', 'rx', `  bidi data: "${dec(v)}"`);
+            await writer.write(v);   // echo back so server sees it
+            await writer.close();
+          });
+        }
+      } catch(e) {}
+    })();
+
+    // Datagrams (5 expected)
+    readAll(stWT.datagrams.readable, v => {
+      log('st', 'dg', `◀ datagram: "${dec(v)}"`);
+    });
+
+    stWT.closed.then(() => {
+      setStatus('st', 'disconnected', 'disconnected');
+      log('st', 'info', 'session closed');
+      document.getElementById('btn-st-disc').disabled = true;
+    }).catch(() => {});
+  } catch(e) {
+    setStatus('st', 'error', 'error');
+    log('st', 'err', `connect failed: ${e.message}`);
+  }
+}
+
+async function stDisconnect() {
+  if (!stWT) return;
+  try { stWT.close({ closeCode: 0, reason: 'user closed' }); } catch(e) {}
+  stWT = null;
+  document.getElementById('btn-st-disc').disabled = true;
+  setStatus('st', 'disconnected', 'disconnected');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.getElementById('serverAddr').textContent   = `server: ${BASE}`;
+document.getElementById('footer-host').textContent  = `${HOST}:${PORT}`;
+</script>
+</body>
+</html>
