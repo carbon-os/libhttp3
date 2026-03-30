@@ -1,6 +1,50 @@
-# libhttp3
+<div align="center">
+  <img src="./res/logo_.png" alt="libhttp3" width="400px">
+  <br><br>
+  <img src="https://img.shields.io/badge/Protocol-HTTP%2F3%20%2B%20QUIC-2565DD" alt="HTTP/3 + QUIC">
+  <img src="https://img.shields.io/badge/Transport-WebTransport-1D55C7" alt="WebTransport">
+  <img src="https://img.shields.io/badge/TLS-1.3%20%2B%20QPACK-3B76E8" alt="TLS 1.3 + QPACK">
+  <img src="https://img.shields.io/badge/Backend-MsQuic-1A4FC4" alt="MsQuic">
+</div>
+
+<br>
 
 A modern, high-performance HTTP/3 and WebTransport server and client library for C++17, built on [MsQuic](https://github.com/microsoft/msquic).
+
+Designed from the ground up around QUIC and TLS 1.3, it skips the legacy baggage of HTTP/1.1 and HTTP/2 entirely — giving you multiplexed streams, zero-RTT connection reuse, and built-in congestion control out of the box. WebTransport is a first-class citizen alongside standard request/response, with datagrams, unidirectional, and bidirectional streams all sharing the same underlying QUIC connection. The API follows familiar [cpp-httplib](https://github.com/yhirose/cpp-httplib) conventions so you can go from zero to a running HTTP/3 server in just a few lines of C++17.
+
+---
+
+## Getting Started
+
+Clone the repo:
+
+```bash
+git clone https://github.com/carbon-os/libhttp3.git
+cd libhttp3
+```
+
+Install dependencies via vcpkg:
+
+```bash
+git clone https://github.com/microsoft/vcpkg.git
+./vcpkg/bootstrap-vcpkg.sh
+./vcpkg/vcpkg install
+```
+
+Build:
+
+```bash
+cmake -B build \
+  -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake \
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build --config Release
+```
+
+For full build options, platform-specific notes, and TLS certificate setup see [BUILD.md](./BUILD.md).
+
+---
 
 ## Features
 
@@ -24,7 +68,6 @@ A modern, high-performance HTTP/3 and WebTransport server and client library for
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-
 ```
 
 This produces:
@@ -42,7 +85,6 @@ MsQuic requires a real TLS certificate. For local testing, generate a self-signe
 ```bash
 openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt \
   -days 365 -nodes -subj "/CN=localhost"
-
 ```
 
 ## Quick start: HTTP/3
@@ -69,7 +111,6 @@ int main() {
 
     svr.listen("0.0.0.0", 4433, "server.crt", "server.key");
 }
-
 ```
 
 ### Client
@@ -88,7 +129,6 @@ int main() {
         printf("error: %s\n", http3::to_string(res.error()));
     }
 }
-
 ```
 
 ## Quick start: WebTransport
@@ -124,7 +164,6 @@ int main() {
 
     svr.listen("0.0.0.0", 4433, "server.crt", "server.key");
 }
-
 ```
 
 ### Client (Standalone)
@@ -143,13 +182,12 @@ int main() {
     s->on_data([](const uint8_t* data, size_t len) {
         printf("Reply: %.*s\n", (int)len, data);
     });
-    
+
     s->write("Hello Server!");
     s->close_write();
 
     sess->close();
 }
-
 ```
 
 ---
@@ -177,7 +215,6 @@ svr.listen("0.0.0.0", 4433, "server.crt", "server.key", "h3"); // custom ALPN
 
 svr.stop();
 svr.is_running();
-
 ```
 
 #### Route patterns
@@ -204,7 +241,6 @@ req.get_header_value("content-type", "text/plain")
 req.has_param("page")
 req.get_param_value("page", "1")
 req.path_param("id")
-
 ```
 
 #### Response
@@ -215,7 +251,6 @@ res.set_content("body text", "text/plain");
 res.set_header("x-custom", "value");
 res.set_redirect("/new-location");      // 302
 res.set_redirect("/new-location", 301); // permanent
-
 ```
 
 ### Client
@@ -244,7 +279,6 @@ auto res = cli.Patch  ("/path", body, content_type);
 
 // Sharing the multiplexed QUIC connection for WebTransport
 std::unique_ptr<webtransport::Session> wt = cli.WebTransport("/wt");
-
 ```
 
 #### Result
@@ -258,7 +292,6 @@ if (res) {                          // true on HTTP success (any status)
 } else {
     http3::to_string(res.error())   // human-readable error
 }
-
 ```
 
 #### Error codes
@@ -307,7 +340,6 @@ webtransport::ReceiveStream
 
 webtransport::Error
   Success, Connection, Rejected, Timeout, Protocol
-
 ```
 
 ## Running the examples
@@ -325,11 +357,10 @@ webtransport::Error
 # Terminal 2 — C++ WebTransport client
 ./build/h3_webtransport_client localhost 5010
 
-# Terminal 2 — Go test suite (requires [github.com/quic-go/quic-go](https://github.com/quic-go/quic-go))
+# Terminal 2 — Go test suite (requires github.com/quic-go/quic-go)
 cd tests
 go run client.go -addr localhost:4433 -insecure -count 5
 go run webtransport_client.go -addr localhost:5010 -insecure -v
-
 ```
 
 ## Project layout
@@ -363,8 +394,15 @@ tests/
                              most mature QUIC/HTTP3/WebTransport implementations
                              available, making it a reliable independent client
                              for validating interoperability against the C++ server
-
 ```
+
+## Platform Support
+
+| Platform | x86_64 | ARM64 |
+| --- | :---: | :---: |
+| Windows | Supported | Supported |
+| Linux | Supported | Supported |
+| macOS | Supported | Supported |
 
 ## Limitations
 
@@ -374,7 +412,7 @@ tests/
 
 ## License
 
-MIT
+Released under the [MIT License](./LICENSE) — © 2025 Netangular Technologies, Inc.
 
 ---
 
@@ -386,5 +424,3 @@ MIT
 * [RFC 9204](https://www.rfc-editor.org/rfc/rfc9204) — QPACK header compression
 * [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000) — QUIC transport
 * [RFC 7541](https://www.rfc-editor.org/rfc/rfc7541) — HPACK / Huffman coding (used by QPACK)
-
-```
