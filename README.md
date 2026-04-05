@@ -9,7 +9,7 @@
 
 <br>
 
-A modern, high-performance HTTP/3 and WebTransport server and client library for C++17, built on [MsQuic](https://github.com/microsoft/msquic).
+A modern, high-performance HTTP/3 and WebTransport server and client library.
 
 Designed from the ground up around QUIC and TLS 1.3, it skips the legacy baggage of HTTP/1.1 and HTTP/2 entirely — giving you multiplexed streams, zero-RTT connection reuse, and built-in congestion control out of the box. WebTransport is a first-class citizen alongside standard request/response, with datagrams, unidirectional, and bidirectional streams all sharing the same underlying QUIC connection. The API follows familiar [cpp-httplib](https://github.com/yhirose/cpp-httplib) conventions so you can go from zero to a running HTTP/3 server in just a few lines of C++17.
 
